@@ -66,6 +66,12 @@ enum request {
     REQ_SCREEN_RESIZE,
     REQ_OPEN_VIM,
 
+    REQ_MOVE_PGDN,
+    REQ_MOVE_PGUP,
+
+    REQ_MOVE_HIGH,
+    REQ_MOVE_LOW,
+
     REQ_MOVE_UP,
     REQ_MOVE_DOWN,
 };
@@ -90,6 +96,12 @@ struct keymap {
 static struct keymap keymap[] = {
     { 'm',      REQ_VIEW_MAIN },
     { 'q',      REQ_VIEW_CLOSE },
+
+    { 'f',      REQ_MOVE_PGDN },
+    { 'F',      REQ_MOVE_PGUP },
+
+    { 'H',      REQ_MOVE_HIGH },
+    { 'L',      REQ_MOVE_LOW },
 
     { 'k',      REQ_MOVE_UP },
     { 'j',      REQ_MOVE_DOWN },
@@ -206,11 +218,15 @@ static void redraw_display(bool clear);
 static bool default_read(struct view *view, char *line);
 static bool default_render(struct view *view, unsigned int lineno);
 static void navigate_view(struct view *view, int request);
+static void navigate_view_pg(struct view *view, int request);
 static void move_view(struct view *view, int lines);
 static void update_title_win(struct view *view);
 static void open_view(struct view *prev);
 static void resize_display(void);
+static void logout(const char* fmt, ...);
 /* declaration end */
+
+static bool g_startup = true;
 
 static struct view main_view = {
     "main",
@@ -373,8 +389,11 @@ int main(int argc, const char *argv[])
     {
         int i;
 
-        foreach_view (view, i)
+        foreach_view (view, i){
             update_view(view);
+
+						logout("<update view> lineno=%lu lines=%lu offset=%lu height=%d\n", view->lineno, view->lines, view->offset, view->height);
+				}
 
         c = wgetch(status_win);
         request = get_request(c);
@@ -902,11 +921,18 @@ static void open_view(struct view *prev)
 static int view_driver(struct view *view, int key)
 {
     switch (key) {
+    case REQ_MOVE_HIGH:
+    case REQ_MOVE_LOW:
     case REQ_MOVE_DOWN:
     case REQ_MOVE_UP:
         if (view)
             navigate_view(view, key);
         break;
+    case REQ_MOVE_PGDN:
+    case REQ_MOVE_PGUP:
+        if (view)
+            navigate_view_pg(view, key);
+				break;
     case REQ_VIEW_CLOSE:
         quit(0);
         break;
@@ -965,78 +991,67 @@ static void report(const char *msg, ...)
     }
 }
 
-static void navigate_view(struct view *view, int request)
+static void navigate_view_pg(struct view *view, int request)
 {
     int steps;
+		int tmpOffset;
+		int oldLineno = view->lineno;
+
+		logout("\n----------------------------------------------\n");
 
     switch (request) {
-    case REQ_MOVE_UP:
-        steps = -1;
+    case REQ_MOVE_PGDN:
+				tmpOffset = view->offset + view->height;
         break;
-
-    case REQ_MOVE_DOWN:
-        steps = 1;
+    case REQ_MOVE_PGUP:
+				tmpOffset = (view->offset >= view->height) ? (view->offset - view->height) : 0;
         break;
     }
 
-    if (steps <= 0 && view->lineno == 0) {
-        report("already at first line");
-        return;
+		view->lineno = 0;
 
-    } else if (steps >= 0 && view->lineno + 1 == view->lines) {
-        report("already at last line");
-        return;
-    }
-
-    /* Move the current line */
-    view->lineno += steps;
-    assert(0 <= view->lineno && view->lineno < view->lines);
-
-    /* Repaint the old "current" line if we be scrolling */
-    view->render(view, view->lineno - steps - view->offset);
+		logout("<pgup> steps=%d lineno=%lu lines=%lu offset=%lu height=%d\n", steps, view->lineno, view->lines, view->offset, view->height);
 
     /* Check whether the view needs to be scrolled */
-    if (view->lineno < view->offset ||
-        view->lineno >= view->offset + view->height)
+    if (view->offset != tmpOffset)
     {
-        if (steps < 0 && -steps > view->offset)
-        {
-            steps = -view->offset;
-        }
-        else if (steps > 0)
-        {
-            if (view->lineno == view->lines - 1 &&
-                view->lines > view->height)
-            {
-                steps = view->lines - view->offset - 1;
-                if (steps >= view->height)
-                {
-                    steps -= view->height - 1;
-                }
-            }
-        }
+				steps = tmpOffset - view->offset;
+				logout("[before move] steps=%d, lineno=%lu lines=%lu offset=%lu height=%d\n", steps, view->lineno, view->lines, view->offset, view->height);
         move_view(view, steps);
+				logout("[move] steps=%d, lineno=%lu lines=%lu offset=%lu height=%d\n", steps, view->lineno, view->lines, view->offset, view->height);
         return;
     }
+		else
+		{
+				view->render(view, oldLineno);
+		}
+
 
     /* Draw the current line */
-    view->render(view, view->lineno - view->offset);
+    view->render(view, view->lineno);
+				logout("[render] lineno=%lu lines=%lu offset=%lu height=%d\n", view->lineno, view->lines, view->offset, view->height);
 
     redrawwin(view->win);
+				logout("[redraw] lineno=%lu lines=%lu offset=%lu height=%d\n", view->lineno, view->lines, view->offset, view->height);
     wrefresh(view->win);
+				logout("[refresh] lineno=%lu lines=%lu offset=%lu height=%d\n", view->lineno, view->lines, view->offset, view->height);
     update_title_win(view);
+				logout("[update_title] lineno=%lu lines=%lu offset=%lu height=%d\n", view->lineno, view->lines, view->offset, view->height);
 }
 
 static void move_view(struct view *view, int lines)
 {
     /* The rendering expects the new offset. */
     view->offset += lines;
+		logout("[: move_view] offset=%lu, lines=%d\n", view->offset, lines);
 
     assert(0 <= view->offset && view->offset < view->lines);
     assert(lines);
 
     int line = lines > 0 ? view->height - lines : 0;
     int end = line + (lines > 0 ? lines : -lines);
+
+		logout("[: move_view] line=%d, end=%d\n", line, end);
 
     wscrl(view->win, lines);
 
@@ -1059,6 +1074,8 @@ static void move_view(struct view *view, int lines)
         view->render(view, view->lineno - view->offset);
     }
 
+		logout("[: move_view] lineno=%lu\n", view->lineno);
+
     assert(view->offset <= view->lineno && view->lineno < view->lines);
 
     redrawwin(view->win);
@@ -1067,3 +1084,113 @@ static void move_view(struct view *view, int lines)
     update_title_win(view);
 }
 
+static void navigate_view(struct view *view, int request)
+{
+    int steps;
+
+				logout("\n----------------------------------------------\n");
+
+    switch (request) {
+    case REQ_MOVE_UP:
+				logout("<up> lineno=%lu lines=%lu offset=%lu height=%d\n", view->lineno, view->lines, view->offset, view->height);
+        steps = -1;
+        break;
+
+    case REQ_MOVE_DOWN:
+				logout("<down> lineno=%lu lines=%lu offset=%lu height=%d\n", view->lineno, view->lines, view->offset, view->height);
+        steps = 1;
+        break;
+
+    case REQ_MOVE_HIGH:
+        steps = view->offset-view->lineno;
+				logout("<begin> lineno=%lu lines=%lu offset=%lu height=%d\n", view->lineno, view->lines, view->offset, view->height);
+        break;
+
+    case REQ_MOVE_LOW:
+        steps = view->height+view->offset-view->lineno-1;
+				logout("<end> lineno=%lu lines=%lu offset=%lu height=%d\n", view->lineno, view->lines, view->offset, view->height);
+        break;
+    }
+
+    if (steps <= 0 && view->lineno == 0) {
+        report("already at first line");
+        return;
+
+    } else if (steps >= 0 && view->lineno + 1 == view->lines) {
+        report("already at last line");
+        return;
+    }
+
+    /* Move the current line */
+    view->lineno += steps;
+    assert(0 <= view->lineno && view->lineno < view->lines);
+
+    /* Repaint the old "current" line if we be scrolling */
+		view->render(view, view->lineno - steps - view->offset);
+		logout("[render] steps=%d, lineno=%lu lines=%lu offset=%lu height=%d\n", steps, view->lineno, view->lines, view->offset, view->height);
+
+    /* Check whether the view needs to be scrolled */
+    if (view->lineno < view->offset ||
+        view->lineno >= view->offset + view->height)
+    {
+        if (steps < 0 && -steps > view->offset)
+        {
+            steps = -view->offset;
+        }
+        else if (steps > 0)
+        {
+            if (view->lineno == view->lines - 1 &&
+                view->lines > view->height)
+            {
+                steps = view->lines - view->offset - 1;
+                if (steps >= view->height)
+                {
+                    steps -= view->height - 1;
+                }
+            }
+        }
+				logout("[before move] steps=%d, lineno=%lu lines=%lu offset=%lu height=%d\n", steps, view->lineno, view->lines, view->offset, view->height);
+
+        move_view(view, steps);
+				logout("[move] steps=%d, lineno=%lu lines=%lu offset=%lu height=%d\n", steps, view->lineno, view->lines, view->offset, view->height);
+        return;
+    }
+
+    /* Draw the current line */
+    view->render(view, view->lineno - view->offset);
+				logout("[render] lineno=%lu lines=%lu offset=%lu height=%d\n", view->lineno, view->lines, view->offset, view->height);
+
+    redrawwin(view->win);
+				logout("[redraw] lineno=%lu lines=%lu offset=%lu height=%d\n", view->lineno, view->lines, view->offset, view->height);
+    wrefresh(view->win);
+				logout("[refresh] lineno=%lu lines=%lu offset=%lu height=%d\n", view->lineno, view->lines, view->offset, view->height);
+    update_title_win(view);
+				logout("[update_title] lineno=%lu lines=%lu offset=%lu height=%d\n", view->lineno, view->lines, view->offset, view->height);
+}
+
+static
+void logout(const char* fmt, ...)
+{
+	//not testing
+	//return;
+
+	//testing
+	FILE* pFile = NULL;
+
+	if (g_startup){
+		g_startup = false;
+		pFile = fopen("log.log", "wt");
+	}
+	else
+		pFile = fopen("log.log", "at");
+
+	if (NULL == pFile)
+		return;
+
+	va_list args;
+	va_start(args, fmt);
+	vfprintf(pFile, fmt, args);
+	va_end(args);
+
+	fclose(pFile);
+}
